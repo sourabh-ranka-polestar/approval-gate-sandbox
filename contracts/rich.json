@@ -53,7 +53,7 @@
             "name": "limit",
             "in": "query",
             "required": false,
-            "description": "Maximum items per page.",
+            "description": "Maximum items per page. Values above 100 are rejected with 422, not 400.",
             "schema": {
               "type": "integer",
               "minimum": 1,
