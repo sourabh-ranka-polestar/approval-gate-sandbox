@@ -29,7 +29,7 @@ jobs:
           mkdir -p out
           jq --arg only "$ONLY" '
             ($only | split(",") | map(select(length>0))) as $p
-            | if ($p|length)==0 then . else .paths |= with_entries(select(.key as $k | $p | index($k))) end
+            | if ($p|length)==0 then . else .paths |= with_entries(select(.key as $k | $p | any(. == $k))) end
           ' contracts/rich.json > out/rich.json
           sha256sum out/rich.json | tee out/SHA256
           {
