@@ -1,6 +1,11 @@
 name: Approval gate test
 on:
   workflow_dispatch:
+    inputs:
+      only_paths:
+        description: 'Comma-separated paths to import (empty = every path). Simulates "import only changed operations".'
+        required: false
+        default: ''
 
 env:
   APIDOG_API_VERSION: '2024-03-28'
@@ -18,13 +23,19 @@ jobs:
           [ -n "$P" ] || { echo "SANDBOX_PROJECT_ID not set"; exit 1; }
           [ "$P" != "$PORTAL_PROJECT_ID" ] || { echo "refusing the portal project"; exit 1; }
       - name: Build artifact (the one thing both imports use)
+        env:
+          ONLY: ${{ inputs.only_paths }}
         run: |
-          mkdir -p out && cp contracts/gate-toy.yaml out/
-          sha256sum out/gate-toy.yaml | tee out/SHA256
+          mkdir -p out
+          jq --arg only "$ONLY" '
+            ($only | split(",") | map(select(length>0))) as $p
+            | if ($p|length)==0 then . else .paths |= with_entries(select(.key as $k | $p | index($k))) end
+          ' contracts/rich.json > out/rich.json
+          sha256sum out/rich.json | tee out/SHA256
           {
             echo "### Build"
             echo "Operations in this build:"
-            grep -E '^  /|^    (get|put|post|delete|patch):' out/gate-toy.yaml
+            jq -r '.paths | to_entries[] | .key as $k | .value | to_entries[] | select(.key|IN("get","put","post","delete","patch")) | "- \(.key|ascii_upcase) \($k)"' out/rich.json
             echo
             echo "sha256: \`$(cut -d' ' -f1 out/SHA256)\`"
             echo
@@ -43,18 +54,18 @@ jobs:
         with:
           name: contracts
           path: out
-      - name: Import to the sandbox preview branch (if configured)
+      - name: Import to the sandbox preview branch
         env:
           APIDOG_ACCESS_TOKEN: ${{ secrets.APIDOG_ACCESS_TOKEN }}
           PROJECT_ID: ${{ vars.SANDBOX_PROJECT_ID }}
           BRANCH_ID: ${{ vars.SANDBOX_PREVIEW_BRANCH_ID }}
         run: |
-          if [ -z "$BRANCH_ID" ]; then echo "No SANDBOX_PREVIEW_BRANCH_ID: preview step skipped"; exit 0; fi
+          [ -n "$BRANCH_ID" ] || { echo "No SANDBOX_PREVIEW_BRANCH_ID"; exit 1; }
           [ "$PROJECT_ID" != "$PORTAL_PROJECT_ID" ] || exit 1
           BR=$(jq -n --argjson b "$BRANCH_ID" '{targetBranchId:$b}')
-          jq -n --rawfile spec out/gate-toy.yaml --argjson br "$BR" '{input:$spec,options:({endpointOverwriteBehavior:"OVERWRITE_EXISTING",schemaOverwriteBehavior:"OVERWRITE_EXISTING",updateFolderOfChangedEndpoint:true}+$br)}' > payload.json
+          jq -n --rawfile spec out/rich.json --argjson br "$BR" '{input:$spec,options:({endpointOverwriteBehavior:"OVERWRITE_EXISTING",schemaOverwriteBehavior:"OVERWRITE_EXISTING",updateFolderOfChangedEndpoint:true}+$br)}' > payload.json
           code=$(curl -s -o resp.json -w '%{http_code}' -X POST "https://api.apidog.com/v1/projects/${PROJECT_ID}/import-openapi?locale=en-US" -H "Authorization: Bearer ${APIDOG_ACCESS_TOKEN}" -H "X-Apidog-Api-Version: ${APIDOG_API_VERSION}" -H "Content-Type: application/json" --data @payload.json)
-          echo "preview import HTTP $code"; cat resp.json; [ "$code" -lt 300 ]
+          echo "preview import HTTP $code"; jq -c '.data.counters | {endpointCreated,endpointUpdated,endpointFailed,schemaCreated,schemaUpdated}' resp.json || cat resp.json; [ "$code" -lt 300 ]
 
   publish-main:
     needs: preview
@@ -75,6 +86,6 @@ jobs:
           PROJECT_ID: ${{ vars.SANDBOX_PROJECT_ID }}
         run: |
           [ "$PROJECT_ID" != "$PORTAL_PROJECT_ID" ] || { echo "refusing the portal project"; exit 1; }
-          jq -n --rawfile spec out/gate-toy.yaml '{input:$spec,options:{endpointOverwriteBehavior:"OVERWRITE_EXISTING",schemaOverwriteBehavior:"OVERWRITE_EXISTING",updateFolderOfChangedEndpoint:true}}' > payload.json
+          jq -n --rawfile spec out/rich.json '{input:$spec,options:{endpointOverwriteBehavior:"OVERWRITE_EXISTING",schemaOverwriteBehavior:"OVERWRITE_EXISTING",updateFolderOfChangedEndpoint:true}}' > payload.json
           code=$(curl -s -o resp.json -w '%{http_code}' -X POST "https://api.apidog.com/v1/projects/${PROJECT_ID}/import-openapi?locale=en-US" -H "Authorization: Bearer ${APIDOG_ACCESS_TOKEN}" -H "X-Apidog-Api-Version: ${APIDOG_API_VERSION}" -H "Content-Type: application/json" --data @payload.json)
-          echo "main import HTTP $code"; cat resp.json; [ "$code" -lt 300 ]
+          echo "main import HTTP $code"; jq -c '.data.counters | {endpointCreated,endpointUpdated,endpointFailed,schemaCreated,schemaUpdated}' resp.json || cat resp.json; [ "$code" -lt 300 ]
