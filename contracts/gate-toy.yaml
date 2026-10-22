@@ -7,6 +7,13 @@ paths:
     get:
       summary: Ping (approval gate test)
       operationId: zzApprovalPing
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum items, rejected with 422 when below 1.
+          schema:
+            type: integer
       responses:
         "200":
           description: ok

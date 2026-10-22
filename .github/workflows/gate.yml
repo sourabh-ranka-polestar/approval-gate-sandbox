@@ -27,6 +27,8 @@ jobs:
             grep -E '^  /|^    (get|put|post|delete|patch):' out/gate-toy.yaml
             echo
             echo "sha256: \`$(cut -d' ' -f1 out/SHA256)\`"
+            echo
+            echo "**Review before approving:** open [the Apidog project](https://app.apidog.com/project/${{ vars.SANDBOX_PROJECT_ID }}) and switch to the preview branch (id ${{ vars.SANDBOX_PREVIEW_BRANCH_ID }}), where this build is imported. Approving the publish-main job imports the same build to main."
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
@@ -57,7 +59,9 @@ jobs:
   publish-main:
     needs: preview
     runs-on: ubuntu-latest
-    environment: sandbox-main-approval
+    environment:
+      name: sandbox-main-approval
+      url: https://app.apidog.com/project/${{ vars.SANDBOX_PROJECT_ID }}
     steps:
       - uses: actions/download-artifact@v4
         with:
