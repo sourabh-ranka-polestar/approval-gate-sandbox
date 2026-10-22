@@ -1,0 +1,76 @@
+name: Approval gate test
+on:
+  workflow_dispatch:
+
+env:
+  APIDOG_API_VERSION: '2024-03-28'
+  PORTAL_PROJECT_ID: '1373099'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse the portal project
+        env:
+          P: ${{ vars.SANDBOX_PROJECT_ID }}
+        run: |
+          [ -n "$P" ] || { echo "SANDBOX_PROJECT_ID not set"; exit 1; }
+          [ "$P" != "$PORTAL_PROJECT_ID" ] || { echo "refusing the portal project"; exit 1; }
+      - name: Build artifact (the one thing both imports use)
+        run: |
+          mkdir -p out && cp contracts/gate-toy.yaml out/
+          sha256sum out/gate-toy.yaml | tee out/SHA256
+          {
+            echo "### Build"
+            echo "Operations in this build:"
+            grep -E '^  /|^    (get|put|post|delete|patch):' out/gate-toy.yaml
+            echo
+            echo "sha256: \`$(cut -d' ' -f1 out/SHA256)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contracts
+          path: out/
+
+  preview:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: contracts
+          path: out
+      - name: Import to the sandbox preview branch (if configured)
+        env:
+          APIDOG_ACCESS_TOKEN: ${{ secrets.APIDOG_ACCESS_TOKEN }}
+          PROJECT_ID: ${{ vars.SANDBOX_PROJECT_ID }}
+          BRANCH_ID: ${{ vars.SANDBOX_PREVIEW_BRANCH_ID }}
+        run: |
+          if [ -z "$BRANCH_ID" ]; then echo "No SANDBOX_PREVIEW_BRANCH_ID: preview step skipped"; exit 0; fi
+          [ "$PROJECT_ID" != "$PORTAL_PROJECT_ID" ] || exit 1
+          BR=$(jq -n --argjson b "$BRANCH_ID" '{targetBranchId:$b}')
+          jq -n --rawfile spec out/gate-toy.yaml --argjson br "$BR" '{input:$spec,options:({endpointOverwriteBehavior:"OVERWRITE_EXISTING",schemaOverwriteBehavior:"OVERWRITE_EXISTING",updateFolderOfChangedEndpoint:true}+$br)}' > payload.json
+          code=$(curl -s -o resp.json -w '%{http_code}' -X POST "https://api.apidog.com/v1/projects/${PROJECT_ID}/import-openapi?locale=en-US" -H "Authorization: Bearer ${APIDOG_ACCESS_TOKEN}" -H "X-Apidog-Api-Version: ${APIDOG_API_VERSION}" -H "Content-Type: application/json" --data @payload.json)
+          echo "preview import HTTP $code"; cat resp.json; [ "$code" -lt 300 ]
+
+  publish-main:
+    needs: preview
+    runs-on: ubuntu-latest
+    environment: sandbox-main-approval
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: contracts
+          path: out
+      - name: Verify it is the artifact that was built
+        run: sha256sum -c out/SHA256
+      - name: Import to sandbox MAIN (approved)
+        env:
+          APIDOG_ACCESS_TOKEN: ${{ secrets.APIDOG_ACCESS_TOKEN }}
+          PROJECT_ID: ${{ vars.SANDBOX_PROJECT_ID }}
+        run: |
+          [ "$PROJECT_ID" != "$PORTAL_PROJECT_ID" ] || { echo "refusing the portal project"; exit 1; }
+          jq -n --rawfile spec out/gate-toy.yaml '{input:$spec,options:{endpointOverwriteBehavior:"OVERWRITE_EXISTING",schemaOverwriteBehavior:"OVERWRITE_EXISTING",updateFolderOfChangedEndpoint:true}}' > payload.json
+          code=$(curl -s -o resp.json -w '%{http_code}' -X POST "https://api.apidog.com/v1/projects/${PROJECT_ID}/import-openapi?locale=en-US" -H "Authorization: Bearer ${APIDOG_ACCESS_TOKEN}" -H "X-Apidog-Api-Version: ${APIDOG_API_VERSION}" -H "Content-Type: application/json" --data @payload.json)
+          echo "main import HTTP $code"; cat resp.json; [ "$code" -lt 300 ]

@@ -1,0 +1,19 @@
+openapi: 3.0.3
+info:
+  title: Approval gate toy
+  version: "1"
+paths:
+  /zz-approval/ping:
+    get:
+      summary: Ping (approval gate test)
+      operationId: zzApprovalPing
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  note:
+                    type: string
